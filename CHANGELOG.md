@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `client_secret_basic` token requests now form-urlencode `client_id`
+  and `client_secret` before Basic-encoding them, as RFC 6749 §2.3.1
+  requires. Previously a secret containing `:`, `%`, `+` or a space was
+  sent raw and misparsed by the IdP. Values made only of unreserved
+  characters (letters, digits, `-._*`) are unchanged, so existing
+  setups such as TARA are unaffected.
+
 - Allow `clippy::double_must_use` in `Cargo.toml [lints.clippy]`.
   Rust 1.99.0's new lint flags `async fn` inside `#[async_trait]`
   blocks (the macro layers its own `#[must_use]` on top of an

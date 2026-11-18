@@ -141,7 +141,8 @@ See [Session storage](#session-storage) below.
 ### Token endpoint client authentication
 
 TIM authenticates to the provider's token endpoint with HTTP Basic
-(`client_secret_basic`, the OIDC default; TARA requires it). For a
+(`client_secret_basic`, the OIDC default; TARA requires it). Per RFC 6749 §2.3.1 the client ID and secret are
+form-urlencoded before being Basic-encoded. For a
 provider whose client is registered with `client_secret_post`, set it
 per provider:
 

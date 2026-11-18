@@ -239,7 +239,14 @@ pub async fn complete_callback(
         // method when the client registration does not say otherwise. A provider registered for it rejects
         // credentials in the body with 401 invalid_client (TARA does).
         TokenEndpointAuthMethod::ClientSecretBasic => {
-            req = req.basic_auth(&*provider.client_id, Some(&*provider.client_secret));
+            // RFC 6749 §2.3.1: id and secret are form-urlencoded *before* being
+            // used as the Basic username/password. reqwest's basic_auth does not
+            // do this, so a secret containing `:`, `%`, `+` or a space would be
+            // misparsed by the IdP.
+            req = req.basic_auth(
+                form_urlencode(&provider.client_id),
+                Some(form_urlencode(&provider.client_secret)),
+            );
         }
         // Opt-in per provider for IdPs registered with client_secret_post.
         TokenEndpointAuthMethod::ClientSecretPost => {
@@ -353,6 +360,11 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
+/// `application/x-www-form-urlencoded` encoding of a single value (RFC 6749 Appendix B).
+fn form_urlencode(v: &str) -> String {
+    url::form_urlencoded::byte_serialize(v.as_bytes()).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -404,6 +416,14 @@ mod tests {
         let expected = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
         assert_eq!(challenge, expected);
         assert_eq!(challenge.len(), 43); // SHA-256 → 32 bytes → 43 chars nopad
+    }
+
+    #[test]
+    fn form_urlencode_leaves_plain_values_and_escapes_basic_auth_delimiters() {
+        // Plain id/secret (the common case) must be byte-for-byte unchanged.
+        assert_eq!(form_urlencode("tim-client_1.x*"), "tim-client_1.x*");
+        // `:` would split the Basic pair, `%`/`+`/space are urlencoding metacharacters.
+        assert_eq!(form_urlencode("a:b%c+d e"), "a%3Ab%25c%2Bd+e");
     }
 
     #[test]
