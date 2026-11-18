@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `oauth2.providers.<id>.token_endpoint_auth_method`: choose between
+  `client_secret_basic` (default, unchanged behaviour) and
+  `client_secret_post` for the token-endpoint client authentication.
+  Lets TIM talk to providers whose client is registered with
+  `client_secret_post`. Unknown values fail config load.
+
 ### Fixed
 
 - Allow `clippy::double_must_use` in `Cargo.toml [lints.clippy]`.

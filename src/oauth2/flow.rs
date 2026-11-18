@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use url::Url;
 
+use crate::config::TokenEndpointAuthMethod;
 use crate::error::{Result, TimError};
 use crate::oauth2::discovery::Discovery;
 use crate::oauth2::idtoken;
@@ -232,22 +233,27 @@ pub async fn complete_callback(
     if let Some(e) = crate::http::block_if_offline(&discovery.token_endpoint) {
         return Err(e);
     }
-    let resp = http
-        .post(&discovery.token_endpoint)
-        // client_secret_basic, which OIDC Core makes the default when the client
-        // registration does not say otherwise. Sending the pair as form fields
-        // (client_secret_post) is what TARA rejects with 401 invalid_client.
-        .basic_auth(&*provider.client_id, Some(&*provider.client_secret))
-        .form(&form)
-        .send()
-        .await
-        .map_err(|e| {
-            if e.is_timeout() {
-                TimError::UpstreamTimeout(format!("token endpoint: {e}"))
-            } else {
-                TimError::BadGateway(format!("token exchange: {e}"))
-            }
-        })?;
+    let mut req = http.post(&discovery.token_endpoint);
+    match provider.config.token_endpoint_auth_method {
+        // Default; OIDC Dynamic Client Registration §2 makes client_secret_basic the
+        // method when the client registration does not say otherwise. A provider registered for it rejects
+        // credentials in the body with 401 invalid_client (TARA does).
+        TokenEndpointAuthMethod::ClientSecretBasic => {
+            req = req.basic_auth(&*provider.client_id, Some(&*provider.client_secret));
+        }
+        // Opt-in per provider for IdPs registered with client_secret_post.
+        TokenEndpointAuthMethod::ClientSecretPost => {
+            form.push(("client_id", provider.client_id.to_string()));
+            form.push(("client_secret", provider.client_secret.to_string()));
+        }
+    }
+    let resp = req.form(&form).send().await.map_err(|e| {
+        if e.is_timeout() {
+            TimError::UpstreamTimeout(format!("token endpoint: {e}"))
+        } else {
+            TimError::BadGateway(format!("token exchange: {e}"))
+        }
+    })?;
     if !resp.status().is_success() {
         // Carry the provider's error body. OAuth2 error responses name the actual problem
         // (invalid_client, invalid_grant, ...); dropping it leaves a bare 401 that cannot
@@ -424,6 +430,7 @@ mod tests {
                 allowed_redirect_uris: vec![],
                 allow_http_discovery: false,
                 jwks_uri: pin.map(str::to_string),
+                token_endpoint_auth_method: Default::default(),
             },
         }
     }

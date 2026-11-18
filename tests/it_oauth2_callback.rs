@@ -29,6 +29,13 @@ mod common;
 const TEST_KEY: &str = include_str!("fixtures/test-jwt-private.pem");
 
 async fn setup_with_provider(server_url: &str) -> Option<axum::Router> {
+    setup_with_provider_method(server_url, Default::default()).await
+}
+
+async fn setup_with_provider_method(
+    server_url: &str,
+    method: tim::config::TokenEndpointAuthMethod,
+) -> Option<axum::Router> {
     let Ok(db_url) = std::env::var("TIM_DATABASE_URL") else {
         eprintln!("SKIP: TIM_DATABASE_URL not set");
         return None;
@@ -71,6 +78,7 @@ async fn setup_with_provider(server_url: &str) -> Option<axum::Router> {
         allowed_redirect_uris: vec!["https://tim.example.com/auth/callback/mock".into()],
         allow_http_discovery: true,
         jwks_uri: None,
+        token_endpoint_auth_method: method,
     };
     provider
         .claim_mappings
@@ -410,6 +418,101 @@ async fn token_exchange_uses_http_basic_and_omits_credentials_from_form_body() {
         .match_header("authorization", expected_basic.as_str())
         .match_body(mockito::Matcher::Regex(
             r"^grant_type=authorization_code&code=any-code(?:&redirect_uri=[^&]+)?(?:&code_verifier=[^&]+)?$".into(),
+        ))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(&token_body)
+        .expect(1)
+        .create_async()
+        .await;
+
+    let (s, body) = get_json(
+        &router,
+        &format!("/auth/callback/mock?code=any-code&state={state}"),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "callback body: {body:?}");
+    m_tok.assert_async().await;
+}
+
+// `token_endpoint_auth_method: client_secret_post` sends client_id/client_secret as form
+// fields and must NOT send an Authorization header.
+#[tokio::test]
+async fn token_exchange_client_secret_post_sends_credentials_in_form_body_without_basic_header() {
+    let mut server = mockito::Server::new_async().await;
+    let base = server.url();
+    let (_sk, pk, pem) = generate_idp_keypair();
+    let kid = "idp-kid-1";
+
+    let discovery_body = json!({
+        "issuer": base.clone(),
+        "authorization_endpoint": format!("{base}/authorize"),
+        "token_endpoint": format!("{base}/token"),
+        "jwks_uri": format!("{base}/jwks"),
+        "grant_types_supported": ["authorization_code"],
+        "response_types_supported": ["code"],
+    })
+    .to_string();
+    let _m_disc = server
+        .mock("GET", "/.well-known/openid-configuration")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(&discovery_body)
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let jwks_body = json!({ "keys": [ jwk_from_public(&pk, kid) ] }).to_string();
+    let _m_jwks = server
+        .mock("GET", "/jwks")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(&jwks_body)
+        .expect_at_least(1)
+        .create_async()
+        .await;
+
+    let Some(router) = setup_with_provider_method(
+        &base,
+        tim::config::TokenEndpointAuthMethod::ClientSecretPost,
+    )
+    .await
+    else {
+        return;
+    };
+    let (_s, body) = get_json(&router, "/auth/login/mock").await;
+    let state = body["state"].as_str().unwrap().to_string();
+    let db_url = std::env::var("TIM_DATABASE_URL").unwrap();
+    let pool = sqlx::PgPool::connect(&db_url).await.unwrap();
+    let (nonce,): (String,) = sqlx::query_as("SELECT nonce FROM auth.oauth_state WHERE state = $1")
+        .bind(&state)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let now = chrono::Utc::now().timestamp();
+    let claims = json!({
+        "iss": base.clone(),
+        "sub": "user-xyz",
+        "aud": "tim-client",
+        "exp": now + 300,
+        "iat": now,
+        "nonce": nonce,
+    });
+    let id_token = sign_id_token(&pem, &claims, kid);
+    let token_body = json!({
+        "access_token": "x",
+        "id_token": id_token,
+        "token_type": "Bearer",
+        "expires_in": 60,
+    })
+    .to_string();
+
+    // Credentials must be in the body; the regex is anchored so extra/missing fields fail.
+    let m_tok = server
+        .mock("POST", "/token")
+        .match_header("authorization", mockito::Matcher::Missing)
+        .match_body(mockito::Matcher::Regex(
+            r"^grant_type=authorization_code&code=any-code(?:&redirect_uri=[^&]+)?(?:&code_verifier=[^&]+)?&client_id=tim-client&client_secret=shhh$".into(),
         ))
         .with_status(200)
         .with_header("content-type", "application/json")
