@@ -54,4 +54,16 @@ ignore = [
     # immediately if TIM ever enables the sqlx `sqlite` feature.
     # Reviewed: 2026-11-13. Next review: 2027-02-13.
     "RUSTSEC-2026-0459",
+
+    # `chrono` — unmaintained (RUSTSEC-2026-0543, announced 2026-09-14).
+    # Not a vulnerability: no known exploitable CVE, no safe upgrade.
+    # Cannot be removed by migrating TIM's own code: `sqlx-postgres`
+    # 0.8.6 and `sqlx-core` depend on chrono unconditionally, so it
+    # stays in the build graph while TIM uses sqlx. TIM uses chrono
+    # only for timestamps (expiry, session TTLs), with no parsing of
+    # untrusted free-form date input beyond RFC 3339 values.
+    # Migration to `time`/`jiff` is blocked on sqlx. Re-check when a
+    # sqlx release drops chrono, or when chrono is replaced upstream.
+    # Reviewed: 2026-11-22. Next review: 2027-02-22.
+    "RUSTSEC-2026-0543",
 ]
