@@ -65,7 +65,10 @@ impl JwksCache {
     /// attempt is recorded even if it failed).
     pub async fn refresh(&self, jwks_uri: &str) -> Result<Option<SharedJwks>> {
         {
-            let mut last = self.last_forced.lock().unwrap_or_else(|e| e.into_inner());
+            let mut last = self
+                .last_forced
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let now = Instant::now();
             if let Some(prev) = last.get(jwks_uri) {
                 if now.duration_since(*prev) < self.min_forced_interval {
